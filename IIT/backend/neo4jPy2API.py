@@ -1,77 +1,87 @@
 from py2neo import Graph, NodeMatcher
 from py2neo.data import Node, Relationship
 
-graph = Graph(password="test")
-matcher = NodeMatcher(graph)
+
+class Topology:
+
+	def __init__(self, password):
+		self.graph = Graph(password= password)
+		self.matcher = NodeMatcher(self.graph)
+
+	def init_db(self):
+		self.graph.run("CREATE CONSTRAINT user_address IF NOT EXISTS FOR (n:User) REQUIRE n.id IS UNIQUE")
+		self.graph.run("CREATE CONSTRAINT resource_address IF NOT EXISTS FOR (n:Resource) REQUIRE n.id IS UNIQUE")
+		self.graph.run("CREATE CONSTRAINT process_address IF NOT EXISTS FOR (n:Process) REQUIRE n.id IS UNIQUE")
+
+	def create_user(self, userId, name):
+		self.graph.run("MERGE (n:User {id: $userId, name: $name})",
+			userId=userId, name=name)
+
+	def user_create_contract(self, userId, nodeId, nodeType, relType):
+		#normalise nodeType
+		#TODO
+
+		self.graph.run("MATCH (a:User) WHERE a.id = $userId "
+			   "MERGE (a)-[:"+ relType +"]->(:" + nodeType + "{id: $nodeId})",
+			   userId=userId, nodeId=nodeId)
+
+	def update_contract_props(self, nodeId, nodeType, data):
+		# data is a dictionary (not nested)
+		node = self.matcher.match( nodeType, id=nodeId).first()
+		for k, v in data.items():
+			node[k] = v
+		self.graph.push(node)
+
+	def contract_create_contract(self, fromId, toId, nodeType, relType):
+		#normalise nodeType
+		#TODO
+
+		self.graph.run(
+				"MERGE (a:Process {id : $fromId})"
+				"MERGE (b:"+ nodeType + "{id : $toId})"
+			   	"MERGE (a)-[:" + relType + "]->(b)",
+			   fromId=fromId, toId=toId)
+
+	def create_relationship(self, u, v, typeRelationship):
+		rel = Relationship(u, typeRelationship, v)
+		self.graph.merge(rel)
+
+	# high level API - Was it simpler the first version?
+	def user_create_resource(self, userId, resourceId, data):
+		print('user', userId)
+		self.user_create_contract(userId = userId, nodeId = resourceId, nodeType="Resource", relType="use")
+		self.update_contract_props(nodeId= resourceId, nodeType="Resource", data= data)
+
+	def user_create_process(self, userId, inputIds, processId, data):
+		'''
+		User does:
+			select inputs
+			describe process
+			describe output
+
+		Process returns:
+			ouput
+			There is only 1 output per process.
 
 
+		The transaction tracks the KPIs of the whole project. 
+		'''
 
-def init_db():
-	graph.run("CREATE CONSTRAINT user_address IF NOT EXISTS FOR (n:User) REQUIRE n.id IS UNIQUE")
-	graph.run("CREATE CONSTRAINT resource_address IF NOT EXISTS FOR (n:Resource) REQUIRE n.id IS UNIQUE")
-	graph.run("CREATE CONSTRAINT process_address IF NOT EXISTS FOR (n:Process) REQUIRE n.id IS UNIQUE")
+		# create process
+		self.user_create_contract(userId = userId, nodeId = processId, nodeType="Process", relType="output")
+		self.update_contract_props(nodeId= processId, nodeType="Process", data= data)
 
-init_db()
+		# links it with inputs
+		v = self.matcher.match( "Process", id = processId).first()
+		for inputId in inputIds:
+			u = self.matcher.match( "Resource", id=inputId).first()
+			self.create_relationship(u, v, "input")
 
-
-def create_user(userId, name):
-    graph.run("MERGE (n:User {id: $userId, name: $name})",
-    	userId=userId, name=name)
-
-def user_create_contract(userId, nodeId, nodeType, relType):
-	#normalise nodeType
-	#TODO
-
-    graph.run("MATCH (a:User) WHERE a.id = $userId "
-           "MERGE (a)-[:"+ relType +"]->(:" + nodeType + "{id: $nodeId})",
-           userId=userId, nodeId=nodeId)
-
-def update_contract_props(nodeId, nodeType, data):
-	# data is a dictionary (not nested)
-	node = matcher.match( nodeType, id=nodeId).first()
-	for k, v in data.items():
-		node[k] = v
-	graph.push(node)
-
-def contract_create_contract(fromId, toId, nodeType, relType):
-	#normalise nodeType
-	#TODO
-
-    graph.run("MATCH (a:Process) WHERE a.id = $fromId "
-           "MERGE (a)-[:" + relType + "]->(:" + nodeType + "{id: $toId})",
-           fromId=fromId, toId=toId)
-
-def create_relationship(u, v, typeRelationship):
-	rel = Relationship(u, typeRelationship, v)
-	graph.merge(rel)
+		# return processId
+		return processId
 
 
-
-
-
-# create a user
-create_user(userId="32893", name="pippo")
-
-# user create a resource
-user_create_contract(userId="32893", nodeId="32", nodeType="Resource", relType="use")
-update_contract_props(nodeId="32", nodeType="Resource", data={
-		"name" : "impedence calculator",
-		"what" : "A script to calculate impedence "
-		})
-
-# user create a process
-user_create_contract(userId="32893", nodeId="74387", nodeType="Process", relType="create")
-update_contract_props(nodeId="74387", nodeType="Process", data={
-		"what" : " ",
-		"why" : " ",
-		"how" : " ",
-		"expected_output" : " ",
-		"expected_outcome" : " "
-		})
-
-#process create output
-contract_create_contract(fromId="74387", toId="289923", nodeType="Resource", relType="create")
-u = matcher.match("Process", id="74387").first()
-v = matcher.match("Resource", id="32").first()
-create_relationship(v, u, "input")
+	def process_create_output(self, processId, resourceId, data):
+		self.contract_create_contract(fromId = processId, toId = resourceId, nodeType="Resource", relType="output")
+		self.update_contract_props(nodeId= resourceId, nodeType="Resource", data= data)
 
